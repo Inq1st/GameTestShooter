@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FPS Map</title>
+  <style>
+    body {
+      background: #1a1a1a;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      overflow: hidden;
+    }
+    canvas {
+      margin: 10px;
+    }
+
+    #mapCanvas {
+      display: none;
+    }
+
+  </style>
+</head>
+<body>
+
+  <canvas id="mapCanvas"></canvas>
+  <canvas id="fpsCanvas"></canvas>
+
+  <script>
+    // --- THE MAP ---
+    const WALL_COLORS = {
+      1: [150, 150, 150],  // grey
+      2: [180, 60,  60 ],  // red
+      3: [60,  90,  180],  // blue
+    }
+    
+    const map = [
+      [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+      [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+      [1, 0, 0, 2, 2, 0, 3, 0, 0, 1],  // 2 = red wall, 3 = blue wall
+      [1, 0, 0, 2, 0, 0, 3, 0, 0, 1],
+      [1, 0, 0, 0, 0, 0, 3, 0, 0, 1],
+      [1, 0, 0, 2, 0, 0, 0, 0, 0, 1],
+      [1, 0, 0, 2, 2, 0, 0, 0, 0, 1],
+      [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+      [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    ];
+
+    // --- SETUP ---
+    const canvas = document.getElementById("mapCanvas");
+    const ctx = canvas.getContext("2d");
+
+    const TILE_SIZE = 50;
+    const MINIMAP_SCALE = 0.5; 
+
+    canvas.width  = map[0].length * TILE_SIZE * MINIMAP_SCALE;
+    canvas.height = map.length * TILE_SIZE * MINIMAP_SCALE;
+
+    const fpsCanvas = document.getElementById("fpsCanvas");
+    const fpsCtx = fpsCanvas.getContext("2d");
+
+    fpsCanvas.width = window.innerWidth;
+    fpsCanvas.height = window.innerHeight;
+
+    const keys = {};
+    window.addEventListener("keydown", (e) => keys[e.key] = true);
+    window.addEventListener("keyup",   (e) => keys[e.key] = false);
+
+    // --- MAP ---
+    function drawMap() {
+      const tileW = TILE_SIZE * MINIMAP_SCALE;
+      
+      for (let row = 0; row < map.length; row++) {
+        for (let col = 0; col < map[row].length; col++) {
+
+          if (map[row][col] === 0) {
+            ctx.fillStyle = "#c8a96e";  // floor
+          } else {
+            ctx.fillStyle = "#222";     // any wall (1, 2, 3, etc.)
+          }
+
+          ctx.fillRect(col * tileW, row * tileW, tileW, tileW);
+
+          // draw grid lines
+          ctx.strokeStyle = "#00000033";
+          ctx.strokeRect(col * tileW, row * tileW, tileW, tileW);
+        }
+      }
+    }
+
+    // --- PLAYER ---
+    const player = {
+      x: 1.5,  // column position (in tiles)
+      y: 1.5,  // row position (in tiles)
+      angle: 0, // angle of player
+    };
+
+    function drawPlayer() {
+      ctx.fillStyle = "red";
+      ctx.beginPath();
+      ctx.arc(
+        player.x * TILE_SIZE,  // x in pixels
+        player.y * TILE_SIZE,  // y in pixels
+        TILE_SIZE / 4,         // radius
+        0,
+        Math.PI * 2
+      );
+
+      ctx.fill();
+
+      // direction line
+      const lineLength = TILE_SIZE / 2;
+      ctx.strokeStyle = "yellow";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(player.x * TILE_SIZE, player.y * TILE_SIZE);
+      ctx.lineTo(
+        player.x * TILE_SIZE + Math.cos(player.angle) * lineLength,
+        player.y * TILE_SIZE + Math.sin(player.angle) * lineLength
+      );
+      ctx.stroke();
+    }
+
+    // --- COLLISION ---
+    function canMove(newX, newY) {
+      const radius = 0.2;
+      return (
+        map[Math.floor(newY - radius)][Math.floor(newX - radius)] === 0 &&
+        map[Math.floor(newY - radius)][Math.floor(newX + radius)] === 0 &&
+        map[Math.floor(newY + radius)][Math.floor(newX - radius)] === 0 &&
+        map[Math.floor(newY + radius)][Math.floor(newX + radius)] === 0
+      );
+    }
+
+    function castRays() {
+      const FOV = Math.PI / 2;
+      const NUM_RAYS = fpsCanvas.width;
+
+      // draw ceiling and floor
+      const skyGradient = fpsCtx.createLinearGradient(0, 0, 0, fpsCanvas.height / 2);
+      skyGradient.addColorStop(0, "#0a0a2e");   // dark blue at top
+      skyGradient.addColorStop(1, "#1a6699");   // lighter blue at horizon
+      fpsCtx.fillStyle = skyGradient;
+      fpsCtx.fillRect(0, 0, fpsCanvas.width, fpsCanvas.height / 2);
+
+      fpsCtx.fillStyle = "#555";
+      fpsCtx.fillRect(0, fpsCanvas.height / 2, fpsCanvas.width, fpsCanvas.height / 2);
+
+      for (let i = 0; i < NUM_RAYS; i++) {
+        const rayAngle = (player.angle - FOV / 2) + (i / NUM_RAYS) * FOV;
+
+        const { dist, wallType } = castSingleRay(rayAngle);  // unpack both
+
+        // fix fisheye effect
+        const correctedDist = dist * Math.cos(rayAngle - player.angle);
+
+        // calculate stripe
+        const stripeHeight = (1 / correctedDist) * 200;
+        const stripeX = (i / NUM_RAYS) * fpsCanvas.width;
+        const stripeWidth = Math.ceil(fpsCanvas.width / NUM_RAYS);
+
+        // get wall color + apply brightness
+        const [r, g, b] = WALL_COLORS[wallType];
+        const brightness = Math.max(0.2, 1 - correctedDist * 0.15);
+        fpsCtx.fillStyle = `rgb(${r * brightness}, ${g * brightness}, ${b * brightness})`;
+
+        fpsCtx.fillRect(
+          stripeX,
+          (fpsCanvas.height / 2) - (stripeHeight / 2),
+          stripeWidth,
+          stripeHeight
+        );
+      }
+    }
+
+    function castSingleRay(angle) {
+      const stepSize = 0.05;
+      let rayX = player.x;
+      let rayY = player.y;
+      let dist = 0;
+      let wallType = 1; // default
+
+      for (dist = 0; dist < 10; dist += stepSize) {
+        rayX += Math.cos(angle) * stepSize;
+        rayY += Math.sin(angle) * stepSize;
+
+        const mapVal = map[Math.floor(rayY)][Math.floor(rayX)];
+        if (mapVal !== 0) {
+          wallType = mapVal; // <-- store what we hit
+          break;
+        }
+      }
+
+      // draw ray on map
+      ctx.strokeStyle = "rgba(255, 255, 0, 0.15)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(player.x * TILE_SIZE, player.y * TILE_SIZE);
+      ctx.lineTo(rayX * TILE_SIZE, rayY * TILE_SIZE);
+      ctx.stroke();
+
+      return { dist, wallType }; // <-- return both
+    }
+
+    function redraw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawMap();
+      drawPlayer();
+      castRays(); 
+    }
+
+    function gameLoop() {
+      let speed = 0.05;
+      if (keys["Shift"]) speed *= 2;
+
+      let newX = player.x;
+      let newY = player.y;
+
+      if (keys["w"]) { newX += Math.cos(player.angle) * speed; newY += Math.sin(player.angle) * speed; }
+      if (keys["s"]) { newX -= Math.cos(player.angle) * speed; newY -= Math.sin(player.angle) * speed; }
+      if (keys["ArrowLeft"])  player.angle -= 0.03;
+      if (keys["ArrowRight"]) player.angle += 0.03;
+
+      // try X and Y separately -- wall sliding!
+      if (canMove(newX, player.y)) player.x = newX;  // try X alone
+      if (canMove(player.x, newY)) player.y = newY;  // try Y alone
+
+      redraw();
+      requestAnimationFrame(gameLoop);
+    }
+
+    // replace your initial drawMap() + drawPlayer() calls with this:
+    requestAnimationFrame(gameLoop);
+
+  </script>
+
+</body>
+</html>
